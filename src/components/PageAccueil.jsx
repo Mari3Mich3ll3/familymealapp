@@ -41,7 +41,7 @@ const PageAccueil = () => {
       title: "Profils Familiaux",
       description: "Gérez les allergies et préférences de chaque membre de votre famille",
       image:
-        "https://images.unsplash.com/photo-1577563908411-5077b6dc7624?ixlib=rb-4.0.3&auto=format&fit=crop&w=2000&q=80",
+ "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?ixlib=rb-4.0.3&auto=format&fit=crop&w=150&q=80",
       details:
         "Créez des profils personnalisés pour chaque membre de votre famille avec leurs allergies, intolérances et préférences alimentaires.",
     },
@@ -398,7 +398,7 @@ const PageAccueil = () => {
           </div>
 
           <div className="border-t border-gray-800 pt-8 flex flex-col md:flex-row justify-between items-center">
-            <p className="text-gray-400 mb-4 md:mb-0">© 2024 FamilyMeal. Tous droits réservés.</p>
+            <p className="text-gray-400 mb-4 md:mb-0">© 2025 FamilyMeal. Tous droits réservés.</p>
             <div className="flex space-x-6">
               {["Confidentialité", "Conditions"].map((item, index) => (
                 <a key={index} href="#" className="text-gray-400 hover:text-white transition-colors text-sm">

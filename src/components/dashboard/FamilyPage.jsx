@@ -9,7 +9,7 @@ import {
   deleteFamilyMember,
   createFamily,
   getAllergies,
-} from "../../services/supabase"
+} from "../../services/supabase.js"
 import {
   FaUsers,
   FaPlus,
@@ -21,38 +21,79 @@ import {
   FaChild,
   FaExclamationTriangle,
   FaHeart,
-  FaCamera,
-  FaSave,
   FaTimes,
   FaUserPlus,
   FaEnvelope,
-  FaSpinner,
   FaSearch,
   FaEye,
   FaCheck,
   FaExclamationCircle,
   FaInfoCircle,
-  FaCalendarAlt,
-  FaShieldAlt,
-  FaBirthdayCake,
+  FaCamera,
+  FaSave,
+  FaSpinner,
 } from "react-icons/fa"
 
 const FamilyPage = () => {
   // Utility functions pour gérer l'affichage des données
   const getDiseaseName = (disease) => {
-    if (typeof disease === "string") return disease
-    return disease?.disease_name || disease?.name || "Maladie non spécifiée"
+    if (typeof disease === "string") return disease.trim()
+    return disease?.disease_name?.trim() || disease?.name?.trim() || "Maladie non spécifiée"
+  }
+
+  const getAllergyName = (allergy) => {
+    if (typeof allergy === "string") return allergy.trim()
+    return allergy?.allergy_name?.trim() || allergy?.name?.trim() || "Allergie non spécifiée"
+  }
+
+  // Fonction pour éliminer les doublons et nettoyer les données
+  const cleanAndDeduplicateArray = (array) => {
+    if (!array || !Array.isArray(array)) return []
+
+    const cleaned = array
+      .map((item) => {
+        if (typeof item === "string") return item.trim()
+        return item?.name?.trim() || item?.allergy_name?.trim() || item?.disease_name?.trim() || ""
+      })
+      .filter((item) => item && item.length > 0) // Supprimer les éléments vides
+
+    // Éliminer les doublons (insensible à la casse)
+    const unique = []
+    const seen = new Set()
+
+    cleaned.forEach((item) => {
+      const lowerItem = item.toLowerCase()
+      if (!seen.has(lowerItem)) {
+        seen.add(lowerItem)
+        unique.push(item)
+      }
+    })
+
+    return unique
   }
 
   const getDiseaseCount = (diseases) => {
-    if (!diseases || !Array.isArray(diseases)) return 0
-    return diseases.length
+    return cleanAndDeduplicateArray(diseases).length
   }
 
   const getAllergyCount = (allergies) => {
-    if (!allergies || !Array.isArray(allergies)) return 0
-    return allergies.length
+    return cleanAndDeduplicateArray(allergies).length
   }
+
+  // Fonction pour recalculer les statistiques en temps réel
+  const calculateStats = (membersList) => {
+    return {
+      totalMembers: membersList.length,
+      membersWithAllergies: membersList.filter((m) => getAllergyCount(m.allergies) > 0).length,
+      membersWithHealthIssues: membersList.filter((m) => getDiseaseCount(m.diseases) > 0 || m.is_sick).length,
+    }
+  }
+
+  const [stats, setStats] = useState({
+    totalMembers: 0,
+    membersWithAllergies: 0,
+    membersWithHealthIssues: 0,
+  })
 
   const [families, setFamilies] = useState([])
   const [selectedFamily, setSelectedFamily] = useState(null)
@@ -78,6 +119,7 @@ const FamilyPage = () => {
     email: "",
     photo: "",
     allergies: [],
+    customAllergies: "",
     diseases: [],
     hasHealthIssues: false,
   })
@@ -100,16 +142,28 @@ const FamilyPage = () => {
     if (searchTerm.trim() === "") {
       setFilteredMembers(members)
     } else {
-      const filtered = members.filter(
-        (member) =>
-          member.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          member.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          member.allergies?.some((allergy) => allergy.toLowerCase().includes(searchTerm.toLowerCase())) ||
-          member.diseases?.some((disease) => {
-            const diseaseName = getDiseaseName(disease)
-            return diseaseName.toLowerCase().includes(searchTerm.toLowerCase())
-          }),
-      )
+      const filtered = members.filter((member) => {
+        const searchLower = searchTerm.toLowerCase()
+
+        // Recherche dans le nom et email
+        if (member.name.toLowerCase().includes(searchLower) || member.email?.toLowerCase().includes(searchLower)) {
+          return true
+        }
+
+        // Recherche dans les allergies
+        const cleanAllergies = cleanAndDeduplicateArray(member.allergies)
+        if (cleanAllergies.some((allergy) => allergy.toLowerCase().includes(searchLower))) {
+          return true
+        }
+
+        // Recherche dans les maladies
+        const cleanDiseases = cleanAndDeduplicateArray(member.diseases)
+        if (cleanDiseases.some((disease) => disease.toLowerCase().includes(searchLower))) {
+          return true
+        }
+
+        return false
+      })
       setFilteredMembers(filtered)
     }
   }, [searchTerm, members])
@@ -127,13 +181,11 @@ const FamilyPage = () => {
   const loadInitialData = async () => {
     try {
       setLoading(true)
-
       // Charger les familles
       const familiesResult = await getUserFamilies()
       if (familiesResult.error) {
         throw new Error(familiesResult.error.message)
       }
-
       if (familiesResult.data) {
         setFamilies(familiesResult.data)
         if (familiesResult.data.length > 0 && !selectedFamily) {
@@ -146,6 +198,13 @@ const FamilyPage = () => {
       if (allergiesResult.data) {
         setCommonAllergies(allergiesResult.data.map((a) => a.name))
       }
+
+      // Initialiser les stats
+      setStats({
+        totalMembers: 0,
+        membersWithAllergies: 0,
+        membersWithHealthIssues: 0,
+      })
     } catch (error) {
       console.error("Erreur lors du chargement initial:", error)
       showNotification("Erreur lors du chargement des données", "error")
@@ -156,30 +215,24 @@ const FamilyPage = () => {
 
   const validateMemberForm = () => {
     const newErrors = {}
-
     if (!memberForm.name.trim()) {
       newErrors.name = "Le nom est obligatoire"
     }
-
     if (memberForm.email && !/\S+@\S+\.\S+/.test(memberForm.email)) {
       newErrors.email = "Email invalide"
     }
-
     if (memberForm.age && (isNaN(memberForm.age) || memberForm.age < 0 || memberForm.age > 150)) {
       newErrors.age = "Âge invalide"
     }
-
     setErrors(newErrors)
     return Object.keys(newErrors).length === 0
   }
 
   const validateFamilyForm = () => {
     const newErrors = {}
-
     if (!familyForm.name.trim()) {
       newErrors.familyName = "Le nom de famille est obligatoire"
     }
-
     setErrors(newErrors)
     return Object.keys(newErrors).length === 0
   }
@@ -191,8 +244,18 @@ const FamilyPage = () => {
         throw new Error(result.error.message)
       }
       if (result.data) {
-        setMembers(result.data)
-        setFilteredMembers(result.data)
+        // Nettoyer les données des membres
+        const cleanedMembers = result.data.map((member) => ({
+          ...member,
+          allergies: cleanAndDeduplicateArray(member.allergies),
+          diseases: cleanAndDeduplicateArray(member.diseases),
+        }))
+        setMembers(cleanedMembers)
+        setFilteredMembers(cleanedMembers)
+
+        // Mettre à jour les statistiques en temps réel
+        const newStats = calculateStats(cleanedMembers)
+        setStats(newStats)
       }
     } catch (error) {
       console.error("Erreur lors du chargement des membres:", error)
@@ -202,7 +265,6 @@ const FamilyPage = () => {
 
   const handleCreateFamily = async () => {
     if (!validateFamilyForm()) return
-
     try {
       setSaving(true)
       const result = await createFamily(familyForm)
@@ -234,9 +296,19 @@ const FamilyPage = () => {
 
     try {
       setSaving(true)
+
+      // Nettoyer et dédupliquer les allergies et maladies
+      const cleanedAllergies = cleanAndDeduplicateArray([
+        ...memberForm.allergies,
+        ...(memberForm.customAllergies ? memberForm.customAllergies.split(",").map((a) => a.trim()) : []),
+      ])
+
+      const cleanedDiseases = memberForm.hasHealthIssues ? cleanAndDeduplicateArray(memberForm.diseases) : []
+
       const memberData = {
         ...memberForm,
-        diseases: memberForm.hasHealthIssues ? memberForm.diseases : [],
+        allergies: cleanedAllergies,
+        diseases: cleanedDiseases,
       }
 
       if (editingMember) {
@@ -286,10 +358,9 @@ const FamilyPage = () => {
   const handleEditMember = (member) => {
     setEditingMember(member)
 
-    // Convertir les maladies objets en chaînes pour l'édition
-    const diseasesArray = member.diseases
-      ? member.diseases.map((disease) => getDiseaseName(disease)).filter(Boolean)
-      : []
+    // Nettoyer les données pour l'édition
+    const cleanedAllergies = cleanAndDeduplicateArray(member.allergies)
+    const cleanedDiseases = cleanAndDeduplicateArray(member.diseases)
 
     setMemberForm({
       name: member.name || "",
@@ -297,9 +368,10 @@ const FamilyPage = () => {
       age: member.age?.toString() || "",
       email: member.email || "",
       photo: member.photo_url || "",
-      allergies: member.allergies || [],
-      diseases: diseasesArray,
-      hasHealthIssues: diseasesArray.length > 0 || member.is_sick || false,
+      allergies: cleanedAllergies,
+      customAllergies: "",
+      diseases: cleanedDiseases,
+      hasHealthIssues: cleanedDiseases.length > 0 || member.is_sick || false,
     })
     setErrors({})
     setShowMemberModal(true)
@@ -307,7 +379,11 @@ const FamilyPage = () => {
 
   const handleViewDetails = async (member) => {
     try {
-      setSelectedMember(member)
+      setSelectedMember({
+        ...member,
+        allergies: cleanAndDeduplicateArray(member.allergies),
+        diseases: cleanAndDeduplicateArray(member.diseases),
+      })
 
       // Charger les détails complets du membre
       const result = await getMemberDetails(member.id)
@@ -315,7 +391,14 @@ const FamilyPage = () => {
         throw new Error(result.error.message)
       }
 
-      setMemberDetails(result.data)
+      if (result.data) {
+        setMemberDetails({
+          ...result.data,
+          allergies: cleanAndDeduplicateArray(result.data.allergies),
+          diseases: cleanAndDeduplicateArray(result.data.diseases),
+        })
+      }
+
       setShowDetailsModal(true)
     } catch (error) {
       console.error("Erreur lors du chargement des détails:", error)
@@ -332,6 +415,7 @@ const FamilyPage = () => {
       email: "",
       photo: "",
       allergies: [],
+      customAllergies: "",
       diseases: [],
       hasHealthIssues: false,
     })
@@ -346,7 +430,6 @@ const FamilyPage = () => {
         showNotification("La taille de l'image ne doit pas dépasser 5MB", "error")
         return
       }
-
       const reader = new FileReader()
       reader.onload = (e) => {
         setMemberForm({ ...memberForm, photo: e.target.result })
@@ -366,10 +449,11 @@ const FamilyPage = () => {
   }
 
   const addDisease = () => {
-    if (newDisease.trim() && !memberForm.diseases.includes(newDisease.trim())) {
+    const trimmedDisease = newDisease.trim()
+    if (trimmedDisease && !memberForm.diseases.includes(trimmedDisease)) {
       setMemberForm({
         ...memberForm,
-        diseases: [...memberForm.diseases, newDisease.trim()],
+        diseases: [...memberForm.diseases, trimmedDisease],
       })
       setNewDisease("")
     }
@@ -470,42 +554,35 @@ const FamilyPage = () => {
             </div>
           </div>
         </div>
-
         <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-lg border border-gray-200/50 dark:border-gray-700/50">
           <div className="flex items-center space-x-3">
             <div className="p-3 bg-emerald-100 dark:bg-emerald-900/30 rounded-xl">
               <FaUser className="text-emerald-600 dark:text-emerald-400 text-lg" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">{members.length}</p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">{stats.totalMembers}</p>
               <p className="text-sm text-gray-600 dark:text-gray-400">Membres actifs</p>
             </div>
           </div>
         </div>
-
         <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-lg border border-gray-200/50 dark:border-gray-700/50">
           <div className="flex items-center space-x-3">
             <div className="p-3 bg-orange-100 dark:bg-orange-900/30 rounded-xl">
               <FaExclamationTriangle className="text-orange-600 dark:text-orange-400 text-lg" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                {members.filter((m) => getAllergyCount(m.allergies) > 0).length}
-              </p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">{stats.membersWithAllergies}</p>
               <p className="text-sm text-gray-600 dark:text-gray-400">Avec allergies</p>
             </div>
           </div>
         </div>
-
         <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 shadow-lg border border-gray-200/50 dark:border-gray-700/50">
           <div className="flex items-center space-x-3">
             <div className="p-3 bg-red-100 dark:bg-red-900/30 rounded-xl">
               <FaHeart className="text-red-600 dark:text-red-400 text-lg" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                {members.filter((m) => getDiseaseCount(m.diseases) > 0 || m.is_sick).length}
-              </p>
+              <p className="text-2xl font-bold text-gray-900 dark:text-white">{stats.membersWithHealthIssues}</p>
               <p className="text-sm text-gray-600 dark:text-gray-400">Problèmes santé</p>
             </div>
           </div>
@@ -610,152 +687,160 @@ const FamilyPage = () => {
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {filteredMembers.map((member) => (
-                <div
-                  key={member.id}
-                  className="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-6 hover:shadow-lg transition-all duration-300 hover:-translate-y-1 border border-gray-200/50 dark:border-gray-600/50"
-                >
-                  <div className="flex items-start justify-between mb-4">
-                    <div className="flex items-center space-x-3">
-                      <div className="relative">
-                        <div className="w-14 h-14">
-                          {member.photo_url ? (
-                            <img
-                              src={member.photo_url || "/placeholder.svg"}
-                              alt={member.name}
-                              className="w-full h-full rounded-full object-cover border-2 border-emerald-200 dark:border-emerald-700"
-                            />
-                          ) : (
-                            <div className="w-full h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center shadow-lg">
-                              {member.gender === "female" ? (
-                                <FaFemale className="text-white text-lg" />
-                              ) : member.age && Number.parseInt(member.age) < 18 ? (
-                                <FaChild className="text-white text-lg" />
-                              ) : (
-                                <FaMale className="text-white text-lg" />
+              {filteredMembers.map((member) => {
+                const cleanAllergies = cleanAndDeduplicateArray(member.allergies)
+                const cleanDiseases = cleanAndDeduplicateArray(member.diseases)
+
+                return (
+                  <div
+                    key={member.id}
+                    className="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-6 hover:shadow-lg transition-all duration-300 hover:-translate-y-1 border border-gray-200/50 dark:border-gray-600/50"
+                  >
+                    <div className="flex items-start justify-between mb-4">
+                      <div className="flex items-center space-x-3">
+                        <div className="relative">
+                          <div className="w-14 h-14">
+                            {member.photo_url ? (
+                              <img
+                                src={member.photo_url || "/placeholder.svg"}
+                                alt={member.name}
+                                className="w-full h-full rounded-full object-cover border-2 border-emerald-200 dark:border-emerald-700"
+                              />
+                            ) : (
+                              <div className="w-full h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center shadow-lg">
+                                {member.gender === "female" ? (
+                                  <FaFemale className="text-white text-lg" />
+                                ) : member.age && Number.parseInt(member.age) < 18 ? (
+                                  <FaChild className="text-white text-lg" />
+                                ) : (
+                                  <FaMale className="text-white text-lg" />
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          <h4 className="font-bold text-gray-900 dark:text-white">{member.name}</h4>
+                          <p className="text-sm text-gray-600 dark:text-gray-400">
+                            {member.age ? `${member.age} ans` : "Âge non spécifié"}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex space-x-1">
+                        <button
+                          onClick={() => handleViewDetails(member)}
+                          className="p-2 text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg transition-colors duration-200"
+                          title="Voir détails"
+                        >
+                          <FaEye className="text-sm" />
+                        </button>
+                        <button
+                          onClick={() => handleEditMember(member)}
+                          className="p-2 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors duration-200"
+                          title="Modifier"
+                        >
+                          <FaEdit className="text-sm" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteMember(member.id, member.name)}
+                          className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors duration-200"
+                          title="Supprimer"
+                        >
+                          <FaTrash className="text-sm" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      {member.email && (
+                        <div className="flex items-center space-x-2 text-sm">
+                          <FaEnvelope className="text-gray-400 text-xs" />
+                          <span className="text-gray-600 dark:text-gray-400 truncate">{member.email}</span>
+                        </div>
+                      )}
+
+                      {cleanAllergies.length > 0 && (
+                        <div className="space-y-2">
+                          <div className="flex items-center space-x-2">
+                            <FaExclamationTriangle className="text-orange-500 text-sm" />
+                            <span className="text-sm font-medium text-gray-900 dark:text-white">
+                              Allergies ({cleanAllergies.length})
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap gap-1">
+                            {cleanAllergies.slice(0, 2).map((allergy, index) => (
+                              <span
+                                key={index}
+                                className="px-2 py-1 bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300 rounded-full text-xs font-medium"
+                              >
+                                {allergy}
+                              </span>
+                            ))}
+                            {cleanAllergies.length > 2 && (
+                              <span className="px-2 py-1 bg-gray-100 text-gray-600 dark:bg-gray-600 dark:text-gray-300 rounded-full text-xs">
+                                +{cleanAllergies.length - 2}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {(cleanDiseases.length > 0 || member.is_sick) && (
+                        <div className="space-y-2">
+                          <div className="flex items-center space-x-2">
+                            <FaHeart className="text-red-500 text-sm" />
+                            <span className="text-sm font-medium text-red-600 dark:text-red-400">
+                              Problèmes de santé {cleanDiseases.length > 0 && `(${cleanDiseases.length})`}
+                            </span>
+                          </div>
+                          {cleanDiseases.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {cleanDiseases.slice(0, 2).map((disease, index) => (
+                                <span
+                                  key={index}
+                                  className="px-2 py-1 bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 rounded-full text-xs font-medium"
+                                >
+                                  {disease}
+                                </span>
+                              ))}
+                              {cleanDiseases.length > 2 && (
+                                <span className="px-2 py-1 bg-gray-100 text-gray-600 dark:bg-gray-600 dark:text-gray-300 rounded-full text-xs">
+                                  +{cleanDiseases.length - 2}
+                                </span>
                               )}
                             </div>
                           )}
                         </div>
-                      </div>
-                      <div>
-                        <h4 className="font-bold text-gray-900 dark:text-white">{member.name}</h4>
-                        <p className="text-sm text-gray-600 dark:text-gray-400">
-                          {member.age ? `${member.age} ans` : "Âge non spécifié"}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex space-x-1">
-                      <button
-                        onClick={() => handleViewDetails(member)}
-                        className="p-2 text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg transition-colors duration-200"
-                        title="Voir détails"
-                      >
-                        <FaEye className="text-sm" />
-                      </button>
-                      <button
-                        onClick={() => handleEditMember(member)}
-                        className="p-2 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors duration-200"
-                        title="Modifier"
-                      >
-                        <FaEdit className="text-sm" />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteMember(member.id, member.name)}
-                        className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors duration-200"
-                        title="Supprimer"
-                      >
-                        <FaTrash className="text-sm" />
-                      </button>
+                      )}
                     </div>
                   </div>
-
-                  <div className="space-y-3">
-                    {member.email && (
-                      <div className="flex items-center space-x-2 text-sm">
-                        <FaEnvelope className="text-gray-400 text-xs" />
-                        <span className="text-gray-600 dark:text-gray-400 truncate">{member.email}</span>
-                      </div>
-                    )}
-
-                    {member.allergies && getAllergyCount(member.allergies) > 0 && (
-                      <div className="space-y-2">
-                        <div className="flex items-center space-x-2">
-                          <FaExclamationTriangle className="text-orange-500 text-sm" />
-                          <span className="text-sm font-medium text-gray-900 dark:text-white">
-                            Allergies ({getAllergyCount(member.allergies)})
-                          </span>
-                        </div>
-                        <div className="flex flex-wrap gap-1">
-                          {member.allergies.slice(0, 3).map((allergy, index) => (
-                            <span
-                              key={index}
-                              className="px-2 py-1 bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300 rounded-full text-xs font-medium"
-                            >
-                              {allergy}
-                            </span>
-                          ))}
-                          {getAllergyCount(member.allergies) > 3 && (
-                            <span className="px-2 py-1 bg-gray-100 text-gray-600 dark:bg-gray-600 dark:text-gray-300 rounded-full text-xs">
-                              +{getAllergyCount(member.allergies) - 3}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {((member.diseases && getDiseaseCount(member.diseases) > 0) || member.is_sick) && (
-                      <div className="space-y-2">
-                        <div className="flex items-center space-x-2">
-                          <FaHeart className="text-red-500 text-sm" />
-                          <span className="text-sm font-medium text-red-600 dark:text-red-400">
-                            Problèmes de santé {member.diseases && `(${getDiseaseCount(member.diseases)})`}
-                          </span>
-                        </div>
-                        {member.diseases && getDiseaseCount(member.diseases) > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            {member.diseases.slice(0, 2).map((disease, index) => (
-                              <span
-                                key={index}
-                                className="px-2 py-1 bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 rounded-full text-xs font-medium"
-                              >
-                                {getDiseaseName(disease)}
-                              </span>
-                            ))}
-                            {getDiseaseCount(member.diseases) > 2 && (
-                              <span className="px-2 py-1 bg-gray-100 text-gray-600 dark:bg-gray-600 dark:text-gray-300 rounded-full text-xs">
-                                +{getDiseaseCount(member.diseases) - 2}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              ))}
+                )
+              })}
             </div>
           )}
         </div>
       )}
 
-      {/* Family Modal */}
+      {/* Modal de création/modification de famille */}
       {showFamilyModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 w-full max-w-md shadow-2xl border border-gray-200/50 dark:border-gray-700/50">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold text-gray-900 dark:text-white">Nouvelle famille</h2>
-              <button
-                onClick={() => {
-                  setShowFamilyModal(false)
-                  setErrors({})
-                }}
-                className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors duration-200"
-              >
-                <FaTimes />
-              </button>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-md w-full">
+            <div className="p-6 border-b border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xl font-bold text-gray-900 dark:text-white">Nouvelle famille</h3>
+                <button
+                  onClick={() => {
+                    setShowFamilyModal(false)
+                    setFamilyForm({ name: "", memberCount: 0 })
+                    setErrors({})
+                  }}
+                  className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors duration-200"
+                >
+                  <FaTimes className="text-lg" />
+                </button>
+              </div>
             </div>
-            <div className="space-y-4">
+            <div className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                   Nom de la famille *
@@ -765,17 +850,18 @@ const FamilyPage = () => {
                   value={familyForm.name}
                   onChange={(e) => setFamilyForm({ ...familyForm, name: e.target.value })}
                   className={`w-full px-4 py-3 border rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white transition-all duration-200 ${
-                    errors.familyName ? "border-red-500 dark:border-red-400" : "border-gray-300 dark:border-gray-600"
+                    errors.familyName ? "border-red-500" : "border-gray-300 dark:border-gray-600"
                   }`}
                   placeholder="Ex: Famille Dupont"
                 />
                 {errors.familyName && <p className="text-red-500 text-sm mt-1">{errors.familyName}</p>}
               </div>
             </div>
-            <div className="flex justify-end space-x-3 mt-6">
+            <div className="p-6 border-t border-gray-200 dark:border-gray-700 flex justify-end space-x-3">
               <button
                 onClick={() => {
                   setShowFamilyModal(false)
+                  setFamilyForm({ name: "", memberCount: 0 })
                   setErrors({})
                 }}
                 className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition-colors duration-200"
@@ -785,7 +871,7 @@ const FamilyPage = () => {
               <button
                 onClick={handleCreateFamily}
                 disabled={saving}
-                className="px-6 py-2 bg-gradient-to-r from-emerald-500 to-teal-500 text-white rounded-xl font-semibold hover:shadow-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                className="flex items-center space-x-2 px-6 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:bg-emerald-300 text-white rounded-lg font-medium transition-colors duration-200"
               >
                 {saving ? <FaSpinner className="animate-spin" /> : <FaSave />}
                 <span>{saving ? "Création..." : "Créer"}</span>
@@ -795,67 +881,62 @@ const FamilyPage = () => {
         </div>
       )}
 
-      {/* Member Modal */}
+      {/* Modal d'ajout/modification de membre */}
       {showMemberModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl border border-gray-200/50 dark:border-gray-700/50">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-bold text-gray-900 dark:text-white">
-                {editingMember ? "Modifier le membre" : "Nouveau membre"}
-              </h2>
-              <button
-                onClick={() => {
-                  setShowMemberModal(false)
-                  resetMemberForm()
-                }}
-                className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors duration-200"
-              >
-                <FaTimes />
-              </button>
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xl font-bold text-gray-900 dark:text-white">
+                  {editingMember ? "Modifier le membre" : "Ajouter un membre"}
+                </h3>
+                <button
+                  onClick={() => {
+                    setShowMemberModal(false)
+                    resetMemberForm()
+                  }}
+                  className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors duration-200"
+                >
+                  <FaTimes className="text-lg" />
+                </button>
+              </div>
             </div>
-
-            <div className="space-y-6">
+            <div className="p-6 space-y-6">
               {/* Photo */}
-              <div className="flex items-center space-x-4">
-                <div className="w-20 h-20">
-                  {memberForm.photo ? (
-                    <img
-                      src={memberForm.photo || "/placeholder.svg"}
-                      alt="Aperçu"
-                      className="w-full h-full rounded-full object-cover border-4 border-emerald-200 dark:border-emerald-700"
-                    />
-                  ) : (
-                    <div className="w-full h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center shadow-lg">
-                      <FaUser className="text-white text-xl" />
-                    </div>
-                  )}
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Photo (optionnel)
-                  </label>
-                  <label className="cursor-pointer bg-gray-100 dark:bg-gray-700 px-4 py-2 rounded-xl hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors duration-200 flex items-center space-x-2">
-                    <FaCamera />
-                    <span>Choisir une photo</span>
+              <div className="text-center">
+                <div className="relative inline-block">
+                  <div className="w-24 h-24 mx-auto mb-4">
+                    {memberForm.photo ? (
+                      <img
+                        src={memberForm.photo || "/placeholder.svg"}
+                        alt="Aperçu"
+                        className="w-full h-full rounded-full object-cover border-4 border-emerald-200 dark:border-emerald-700"
+                      />
+                    ) : (
+                      <div className="w-full h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center shadow-lg">
+                        <FaUser className="text-white text-2xl" />
+                      </div>
+                    )}
+                  </div>
+                  <label className="absolute bottom-0 right-0 bg-emerald-500 hover:bg-emerald-600 text-white p-2 rounded-full cursor-pointer shadow-lg transition-colors duration-200">
+                    <FaCamera className="text-sm" />
                     <input type="file" accept="image/*" onChange={handleImageUpload} className="hidden" />
                   </label>
                 </div>
               </div>
 
-              {/* Basic Info */}
-              <div className="grid md:grid-cols-2 gap-4">
+              {/* Informations de base */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Nom complet *
-                  </label>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Nom *</label>
                   <input
                     type="text"
                     value={memberForm.name}
                     onChange={(e) => setMemberForm({ ...memberForm, name: e.target.value })}
                     className={`w-full px-4 py-3 border rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white transition-all duration-200 ${
-                      errors.name ? "border-red-500 dark:border-red-400" : "border-gray-300 dark:border-gray-600"
+                      errors.name ? "border-red-500" : "border-gray-300 dark:border-gray-600"
                     }`}
-                    placeholder="Ex: Marie Dupont"
+                    placeholder="Nom complet"
                   />
                   {errors.name && <p className="text-red-500 text-sm mt-1">{errors.name}</p>}
                 </div>
@@ -866,9 +947,8 @@ const FamilyPage = () => {
                     onChange={(e) => setMemberForm({ ...memberForm, gender: e.target.value })}
                     className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white transition-all duration-200"
                   >
-                    <option value="male">Homme</option>
-                    <option value="female">Femme</option>
-                    <option value="other">Autre</option>
+                    <option value="male">Masculin</option>
+                    <option value="female">Féminin</option>
                   </select>
                 </div>
                 <div>
@@ -878,9 +958,9 @@ const FamilyPage = () => {
                     value={memberForm.age}
                     onChange={(e) => setMemberForm({ ...memberForm, age: e.target.value })}
                     className={`w-full px-4 py-3 border rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white transition-all duration-200 ${
-                      errors.age ? "border-red-500 dark:border-red-400" : "border-gray-300 dark:border-gray-600"
+                      errors.age ? "border-red-500" : "border-gray-300 dark:border-gray-600"
                     }`}
-                    placeholder="Ex: 25"
+                    placeholder="Âge en années"
                     min="0"
                     max="150"
                   />
@@ -893,9 +973,9 @@ const FamilyPage = () => {
                     value={memberForm.email}
                     onChange={(e) => setMemberForm({ ...memberForm, email: e.target.value })}
                     className={`w-full px-4 py-3 border rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white transition-all duration-200 ${
-                      errors.email ? "border-red-500 dark:border-red-400" : "border-gray-300 dark:border-gray-600"
+                      errors.email ? "border-red-500" : "border-gray-300 dark:border-gray-600"
                     }`}
-                    placeholder="marie@example.com"
+                    placeholder="email@exemple.com"
                   />
                   {errors.email && <p className="text-red-500 text-sm mt-1">{errors.email}</p>}
                 </div>
@@ -903,99 +983,87 @@ const FamilyPage = () => {
 
               {/* Allergies */}
               <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-                  Allergies alimentaires
-                </label>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Allergies</label>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                   {commonAllergies.map((allergy) => (
-                    <button
-                      key={allergy}
-                      type="button"
-                      onClick={() => toggleAllergy(allergy)}
-                      className={`p-3 rounded-xl text-sm font-medium transition-all duration-200 ${
-                        memberForm.allergies.includes(allergy)
-                          ? "bg-orange-100 dark:bg-orange-900/20 text-orange-700 dark:text-orange-300 border-2 border-orange-300 dark:border-orange-700 transform scale-105"
-                          : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600 border-2 border-transparent"
-                      }`}
-                    >
-                      {allergy}
-                    </button>
+                    <label key={allergy} className="flex items-center space-x-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={memberForm.allergies.includes(allergy)}
+                        onChange={() => toggleAllergy(allergy)}
+                        className="rounded border-gray-300 text-emerald-500 focus:ring-emerald-500"
+                      />
+                      <span className="text-sm text-gray-700 dark:text-gray-300">{allergy}</span>
+                    </label>
                   ))}
+                </div>
+                <div className="mt-3">
+                  <input
+                    type="text"
+                    value={memberForm.customAllergies}
+                    onChange={(e) => setMemberForm({ ...memberForm, customAllergies: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                    placeholder="Autres allergies (séparées par des virgules)"
+                  />
                 </div>
               </div>
 
-              {/* Health Issues */}
+              {/* Problèmes de santé */}
               <div>
-                <div className="flex items-center space-x-3 mb-4">
+                <label className="flex items-center space-x-2 cursor-pointer mb-3">
                   <input
                     type="checkbox"
-                    id="hasHealthIssues"
                     checked={memberForm.hasHealthIssues}
-                    onChange={(e) =>
-                      setMemberForm({
-                        ...memberForm,
-                        hasHealthIssues: e.target.checked,
-                        diseases: e.target.checked ? memberForm.diseases : [],
-                      })
-                    }
-                    className="w-4 h-4 text-red-600 bg-gray-100 border-gray-300 rounded focus:ring-red-500 dark:focus:ring-red-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600"
+                    onChange={(e) => setMemberForm({ ...memberForm, hasHealthIssues: e.target.checked })}
+                    className="rounded border-gray-300 text-emerald-500 focus:ring-emerald-500"
                   />
-                  <label htmlFor="hasHealthIssues" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
                     Cette personne a des problèmes de santé
-                  </label>
-                </div>
-
+                  </span>
+                </label>
                 {memberForm.hasHealthIssues && (
-                  <div className="space-y-4">
+                  <div className="space-y-3">
                     <div className="flex space-x-2">
                       <input
                         type="text"
                         value={newDisease}
                         onChange={(e) => setNewDisease(e.target.value)}
                         onKeyPress={handleKeyPress}
-                        className="flex-1 px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-red-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white transition-all duration-200"
-                        placeholder="Ex: Diabète, hypertension..."
+                        className="flex-1 px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm"
+                        placeholder="Ajouter une maladie ou condition"
                       />
                       <button
                         type="button"
                         onClick={addDisease}
-                        disabled={!newDisease.trim()}
-                        className="px-4 py-3 bg-red-500 hover:bg-red-600 text-white rounded-xl transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center"
+                        className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg text-sm font-medium transition-colors duration-200"
                       >
-                        <FaPlus />
+                        Ajouter
                       </button>
                     </div>
-
                     {memberForm.diseases.length > 0 && (
-                      <div className="space-y-2">
-                        <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                          Problèmes de santé ajoutés :
-                        </p>
-                        <div className="flex flex-wrap gap-2">
-                          {memberForm.diseases.map((disease, index) => (
-                            <span
-                              key={index}
-                              className="inline-flex items-center px-3 py-1 bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 rounded-full text-sm font-medium"
+                      <div className="flex flex-wrap gap-2">
+                        {memberForm.diseases.map((disease, index) => (
+                          <span
+                            key={index}
+                            className="inline-flex items-center space-x-1 px-3 py-1 bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 rounded-full text-sm"
+                          >
+                            <span>{disease}</span>
+                            <button
+                              type="button"
+                              onClick={() => removeDisease(disease)}
+                              className="text-red-500 hover:text-red-700 ml-1"
                             >
-                              {disease}
-                              <button
-                                type="button"
-                                onClick={() => removeDisease(disease)}
-                                className="ml-2 text-red-500 hover:text-red-700 dark:hover:text-red-400"
-                              >
-                                <FaTimes className="text-xs" />
-                              </button>
-                            </span>
-                          ))}
-                        </div>
+                              <FaTimes className="text-xs" />
+                            </button>
+                          </span>
+                        ))}
                       </div>
                     )}
                   </div>
                 )}
               </div>
             </div>
-
-            <div className="flex justify-end space-x-3 mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
+            <div className="p-6 border-t border-gray-200 dark:border-gray-700 flex justify-end space-x-3">
               <button
                 onClick={() => {
                   setShowMemberModal(false)
@@ -1008,7 +1076,7 @@ const FamilyPage = () => {
               <button
                 onClick={handleSaveMember}
                 disabled={saving}
-                className="px-6 py-2 bg-gradient-to-r from-emerald-500 to-teal-500 text-white rounded-xl font-semibold hover:shadow-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                className="flex items-center space-x-2 px-6 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:bg-emerald-300 text-white rounded-lg font-medium transition-colors duration-200"
               >
                 {saving ? <FaSpinner className="animate-spin" /> : <FaSave />}
                 <span>{saving ? "Sauvegarde..." : editingMember ? "Modifier" : "Ajouter"}</span>
@@ -1018,35 +1086,36 @@ const FamilyPage = () => {
         </div>
       )}
 
-      {/* Details Modal */}
-      {showDetailsModal && memberDetails && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl border border-gray-200/50 dark:border-gray-700/50">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Profil complet</h2>
-              <button
-                onClick={() => setShowDetailsModal(false)}
-                className="text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors duration-200"
-              >
-                <FaTimes />
-              </button>
+      {/* Modal de détails du membre */}
+      {showDetailsModal && selectedMember && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-6 border-b border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between">
+                <h3 className="text-2xl font-bold text-gray-900 dark:text-white">Détails du membre</h3>
+                <button
+                  onClick={() => setShowDetailsModal(false)}
+                  className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors duration-200"
+                >
+                  <FaTimes className="text-lg" />
+                </button>
+              </div>
             </div>
-
-            <div className="space-y-8">
-              {/* Member Header */}
-              <div className="flex items-center space-x-6 p-6 bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-900/20 dark:to-teal-900/20 rounded-2xl">
+            <div className="p-6 space-y-6">
+              {/* Photo et informations de base */}
+              <div className="flex items-center space-x-6">
                 <div className="w-24 h-24">
-                  {memberDetails.photo_url ? (
+                  {selectedMember.photo_url ? (
                     <img
-                      src={memberDetails.photo_url || "/placeholder.svg"}
-                      alt={memberDetails.name}
-                      className="w-full h-full rounded-full object-cover border-4 border-emerald-200 dark:border-emerald-700 shadow-lg"
+                      src={selectedMember.photo_url || "/placeholder.svg"}
+                      alt={selectedMember.name}
+                      className="w-full h-full rounded-full object-cover border-4 border-emerald-200 dark:border-emerald-700"
                     />
                   ) : (
                     <div className="w-full h-full bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center shadow-lg">
-                      {memberDetails.gender === "female" ? (
+                      {selectedMember.gender === "female" ? (
                         <FaFemale className="text-white text-2xl" />
-                      ) : memberDetails.age && Number.parseInt(memberDetails.age) < 18 ? (
+                      ) : selectedMember.age && Number.parseInt(selectedMember.age) < 18 ? (
                         <FaChild className="text-white text-2xl" />
                       ) : (
                         <FaMale className="text-white text-2xl" />
@@ -1055,228 +1124,123 @@ const FamilyPage = () => {
                   )}
                 </div>
                 <div className="flex-1">
-                  <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">{memberDetails.name}</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                    <div className="flex items-center space-x-2">
-                      <FaBirthdayCake className="text-emerald-500" />
-                      <span className="text-gray-600 dark:text-gray-400">
-                        {memberDetails.age ? `${memberDetails.age} ans` : "Âge non spécifié"}
+                  <h4 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">{selectedMember.name}</h4>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <span className="text-gray-500 dark:text-gray-400">Âge:</span>
+                      <span className="ml-2 font-medium text-gray-900 dark:text-white">
+                        {selectedMember.age ? `${selectedMember.age} ans` : "Non spécifié"}
                       </span>
                     </div>
-                    <div className="flex items-center space-x-2">
-                      <FaUser className="text-emerald-500" />
-                      <span className="text-gray-600 dark:text-gray-400">
-                        {memberDetails.gender === "female"
-                          ? "Femme"
-                          : memberDetails.gender === "male"
-                            ? "Homme"
-                            : "Autre"}
-                      </span>
-                    </div>
-                    {memberDetails.email && (
-                      <div className="flex items-center space-x-2">
-                        <FaEnvelope className="text-emerald-500" />
-                        <span className="text-gray-600 dark:text-gray-400">{memberDetails.email}</span>
-                      </div>
-                    )}
-                    <div className="flex items-center space-x-2">
-                      <FaCalendarAlt className="text-emerald-500" />
-                      <span className="text-gray-600 dark:text-gray-400">
-                        Membre depuis {new Date(memberDetails.created_at).toLocaleDateString()}
+                    <div>
+                      <span className="text-gray-500 dark:text-gray-400">Genre:</span>
+                      <span className="ml-2 font-medium text-gray-900 dark:text-white capitalize">
+                        {selectedMember.gender === "male" ? "Masculin" : "Féminin"}
                       </span>
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* Health Summary */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="bg-orange-50 dark:bg-orange-900/20 rounded-xl p-4 border border-orange-200 dark:border-orange-800">
-                  <div className="flex items-center space-x-3 mb-2">
-                    <FaShieldAlt className="text-orange-500 text-lg" />
-                    <h4 className="font-semibold text-orange-700 dark:text-orange-300">Allergies</h4>
+              {/* Email */}
+              {selectedMember.email && (
+                <div className="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-4">
+                  <div className="flex items-center space-x-3">
+                    <FaEnvelope className="text-blue-500 text-lg" />
+                    <div>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">Email</p>
+                      <p className="font-medium text-gray-900 dark:text-white">{selectedMember.email}</p>
+                    </div>
                   </div>
-                  <p className="text-2xl font-bold text-orange-600 dark:text-orange-400">
-                    {memberDetails.allergiesDetails?.length || 0}
-                  </p>
-                  <p className="text-sm text-orange-600 dark:text-orange-400">
-                    {memberDetails.allergiesDetails?.length > 0 ? "Allergies déclarées" : "Aucune allergie"}
-                  </p>
                 </div>
+              )}
 
-                <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-4 border border-red-200 dark:border-red-800">
-                  <div className="flex items-center space-x-3 mb-2">
+              {/* Allergies */}
+              {selectedMember.allergies && selectedMember.allergies.length > 0 && (
+                <div className="bg-orange-50 dark:bg-orange-900/20 rounded-xl p-4">
+                  <div className="flex items-center space-x-3 mb-3">
+                    <FaExclamationTriangle className="text-orange-500 text-lg" />
+                    <h5 className="font-semibold text-gray-900 dark:text-white">
+                      Allergies ({selectedMember.allergies.length})
+                    </h5>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedMember.allergies.map((allergy, index) => (
+                      <span
+                        key={index}
+                        className="px-3 py-1 bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300 rounded-full text-sm font-medium"
+                      >
+                        {allergy}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Maladies */}
+              {((selectedMember.diseases && selectedMember.diseases.length > 0) || selectedMember.is_sick) && (
+                <div className="bg-red-50 dark:bg-red-900/20 rounded-xl p-4">
+                  <div className="flex items-center space-x-3 mb-3">
                     <FaHeart className="text-red-500 text-lg" />
-                    <h4 className="font-semibold text-red-700 dark:text-red-300">Maladies</h4>
+                    <h5 className="font-semibold text-gray-900 dark:text-white">
+                      Problèmes de santé {selectedMember.diseases && `(${selectedMember.diseases.length})`}
+                    </h5>
                   </div>
-                  <p className="text-2xl font-bold text-red-600 dark:text-red-400">
-                    {memberDetails.diseasesDetails?.length || 0}
-                  </p>
-                  <p className="text-sm text-red-600 dark:text-red-400">
-                    {memberDetails.diseasesDetails?.length > 0 ? "Problèmes de santé" : "Aucun problème"}
-                  </p>
+                  {selectedMember.diseases && selectedMember.diseases.length > 0 ? (
+                    <div className="flex flex-wrap gap-2">
+                      {selectedMember.diseases.map((disease, index) => (
+                        <span
+                          key={index}
+                          className="px-3 py-1 bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 rounded-full text-sm font-medium"
+                        >
+                          {disease}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-red-600 dark:text-red-400">Problèmes de santé signalés</p>
+                  )}
                 </div>
+              )}
 
-                <div className="bg-green-50 dark:bg-green-900/20 rounded-xl p-4 border border-green-200 dark:border-green-800">
-                  <div className="flex items-center space-x-3 mb-2">
-                    <FaCheck className="text-green-500 text-lg" />
-                    <h4 className="font-semibold text-green-700 dark:text-green-300">Statut</h4>
+              {/* Informations supplémentaires */}
+              <div className="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-4">
+                <h5 className="font-semibold text-gray-900 dark:text-white mb-3">Informations supplémentaires</h5>
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span className="text-gray-500 dark:text-gray-400">Membre depuis:</span>
+                    <span className="ml-2 font-medium text-gray-900 dark:text-white">
+                      {selectedMember.created_at
+                        ? new Date(selectedMember.created_at).toLocaleDateString()
+                        : "Non disponible"}
+                    </span>
                   </div>
-                  <p className="text-lg font-bold text-green-600 dark:text-green-400">
-                    {memberDetails.allergiesDetails?.length === 0 && memberDetails.diseasesDetails?.length === 0
-                      ? "Sain"
-                      : "Attention"}
-                  </p>
-                  <p className="text-sm text-green-600 dark:text-green-400">
-                    {memberDetails.allergiesDetails?.length === 0 && memberDetails.diseasesDetails?.length === 0
-                      ? "Aucun problème"
-                      : "Surveillance requise"}
-                  </p>
+                  <div>
+                    <span className="text-gray-500 dark:text-gray-400">Statut:</span>
+                    <span className="ml-2">
+                      <span className="px-2 py-1 bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300 rounded-full text-xs font-medium">
+                        Actif
+                      </span>
+                    </span>
+                  </div>
                 </div>
               </div>
-
-              {/* Detailed Allergies */}
-              {memberDetails.allergiesDetails && memberDetails.allergiesDetails.length > 0 && (
-                <div className="bg-white dark:bg-gray-700/50 rounded-xl p-6 border border-gray-200 dark:border-gray-600">
-                  <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center space-x-2">
-                    <FaExclamationTriangle className="text-orange-500" />
-                    <span>Allergies alimentaires détaillées</span>
-                  </h4>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {memberDetails.allergiesDetails.map((allergy, index) => (
-                      <div
-                        key={index}
-                        className="p-4 bg-orange-50 dark:bg-orange-900/20 rounded-xl border border-orange-200 dark:border-orange-800"
-                      >
-                        <div className="flex items-start justify-between mb-2">
-                          <h5 className="font-semibold text-orange-700 dark:text-orange-300">{allergy.name}</h5>
-                          <span
-                            className={`px-2 py-1 rounded-full text-xs font-medium ${
-                              allergy.severity === "severe"
-                                ? "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300"
-                                : allergy.severity === "moderate"
-                                  ? "bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300"
-                                  : "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300"
-                            }`}
-                          >
-                            {allergy.severity === "severe"
-                              ? "Sévère"
-                              : allergy.severity === "moderate"
-                                ? "Modérée"
-                                : "Légère"}
-                          </span>
-                        </div>
-                        {allergy.description && (
-                          <p className="text-sm text-orange-600 dark:text-orange-400 mb-2">{allergy.description}</p>
-                        )}
-                        {allergy.notes && (
-                          <div className="flex items-start space-x-2">
-                            <FaNotes className="text-orange-500 text-xs mt-1" />
-                            <p className="text-sm text-orange-600 dark:text-orange-400">{allergy.notes}</p>
-                          </div>
-                        )}
-                        {allergy.added_date && (
-                          <p className="text-xs text-orange-500 dark:text-orange-400 mt-2">
-                            Ajouté le {new Date(allergy.added_date).toLocaleDateString()}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Detailed Diseases */}
-              {memberDetails.diseasesDetails && memberDetails.diseasesDetails.length > 0 && (
-                <div className="bg-white dark:bg-gray-700/50 rounded-xl p-6 border border-gray-200 dark:border-gray-600">
-                  <h4 className="text-lg font-semibold text-gray-900 dark:text-white mb-4 flex items-center space-x-2">
-                    <FaHeart className="text-red-500" />
-                    <span>Problèmes de santé détaillés</span>
-                  </h4>
-                  <div className="space-y-4">
-                    {memberDetails.diseasesDetails.map((disease, index) => (
-                      <div
-                        key={index}
-                        className="p-4 bg-red-50 dark:bg-red-900/20 rounded-xl border border-red-200 dark:border-red-800"
-                      >
-                        <div className="flex items-start justify-between mb-3">
-                          <h5 className="font-semibold text-red-700 dark:text-red-300 text-lg">{disease.name}</h5>
-                          {disease.diagnosed_date && (
-                            <span className="px-3 py-1 bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 rounded-full text-xs font-medium">
-                              Diagnostiqué le {new Date(disease.diagnosed_date).toLocaleDateString()}
-                            </span>
-                          )}
-                        </div>
-
-                        {disease.description && (
-                          <p className="text-sm text-red-600 dark:text-red-400 mb-3">{disease.description}</p>
-                        )}
-
-                        {disease.dietary_restrictions && (
-                          <div className="mb-3">
-                            <h6 className="font-medium text-red-700 dark:text-red-300 mb-1">
-                              Restrictions alimentaires :
-                            </h6>
-                            <p className="text-sm text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-900/30 p-2 rounded-lg">
-                              {disease.dietary_restrictions}
-                            </p>
-                          </div>
-                        )}
-
-                        {disease.notes && (
-                          <div className="flex items-start space-x-2">
-                            <FaNotes className="text-red-500 text-sm mt-1" />
-                            <div>
-                              <h6 className="font-medium text-red-700 dark:text-red-300 mb-1">Notes :</h6>
-                              <p className="text-sm text-red-600 dark:text-red-400">{disease.notes}</p>
-                            </div>
-                          </div>
-                        )}
-
-                        {disease.added_date && (
-                          <p className="text-xs text-red-500 dark:text-red-400 mt-3">
-                            Ajouté le {new Date(disease.added_date).toLocaleDateString()}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* No health issues */}
-              {(!memberDetails.allergiesDetails || memberDetails.allergiesDetails.length === 0) &&
-                (!memberDetails.diseasesDetails || memberDetails.diseasesDetails.length === 0) && (
-                  <div className="text-center py-12 bg-green-50 dark:bg-green-900/20 rounded-xl border border-green-200 dark:border-green-800">
-                    <div className="w-20 h-20 bg-green-100 dark:bg-green-900/30 rounded-full flex items-center justify-center mx-auto mb-4">
-                      <FaCheck className="text-green-500 text-3xl" />
-                    </div>
-                    <h4 className="text-xl font-semibold text-green-700 dark:text-green-300 mb-2">
-                      Excellent état de santé
-                    </h4>
-                    <p className="text-green-600 dark:text-green-400">
-                      Aucun problème de santé ou allergie alimentaire signalé pour ce membre.
-                    </p>
-                  </div>
-                )}
             </div>
-
-            <div className="flex justify-end space-x-3 mt-8 pt-6 border-t border-gray-200 dark:border-gray-700">
+            <div className="p-6 border-t border-gray-200 dark:border-gray-700 flex justify-end space-x-3">
+              <button
+                onClick={() => setShowDetailsModal(false)}
+                className="px-4 py-2 text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition-colors duration-200"
+              >
+                Fermer
+              </button>
               <button
                 onClick={() => {
                   setShowDetailsModal(false)
                   handleEditMember(selectedMember)
                 }}
-                className="px-6 py-3 bg-blue-500 hover:bg-blue-600 text-white rounded-xl font-semibold transition-colors duration-200 flex items-center space-x-2"
+                className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg font-medium transition-colors duration-200"
               >
-                <FaEdit />
-                <span>Modifier</span>
-              </button>
-              <button
-                onClick={() => setShowDetailsModal(false)}
-                className="px-6 py-3 bg-gray-500 hover:bg-gray-600 text-white rounded-xl font-semibold transition-colors duration-200"
-              >
-                Fermer
+                Modifier
               </button>
             </div>
           </div>

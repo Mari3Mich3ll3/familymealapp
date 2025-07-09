@@ -1,256 +1,188 @@
 "use client"
 import { useState, useEffect, useRef } from "react"
-import { getCurrentUser, getUserFamilies, getFamilyMembers, getUserDishes } from "../../services/supabase"
-import {
-  FaRobot,
-  FaPaperPlane,
-  FaUser,
-  FaUtensils,
-  FaShoppingCart,
-  FaLightbulb,
-  FaHeart,
-  FaSpinner,
-  FaCopy,
-  FaThumbsUp,
-  FaThumbsDown,
-} from "react-icons/fa"
+import { 
+  getAllFamilyMembers, 
+  getUserDishes, 
+  getUserIngredients,
+  getUserFamilies,
+  getFamilyCalendar 
+} from "../../services/supabase"
+import { FaPaperPlane, FaRobot, FaUser } from "react-icons/fa"
+import { GoogleGenerativeAI } from "@google/generative-ai"
 
 const AIAssistantPage = () => {
-  const [messages, setMessages] = useState([])
+  const [messages, setMessages] = useState([
+    {
+      id: 1,
+      type: "ai",
+      content: "Bonjour ! Je suis votre assistant culinaire IA. Je peux vous aider avec vos repas, plannings, recettes et listes de courses. Comment puis-je vous aider aujourd'hui ?",
+      timestamp: new Date()
+    }
+  ])
   const [inputMessage, setInputMessage] = useState("")
-  const [loading, setLoading] = useState(false)
-  const [user, setUser] = useState(null)
-  const [familyData, setFamilyData] = useState(null)
+  const [isLoading, setIsLoading] = useState(false)
+  const [contextData, setContextData] = useState({
+    members: [],
+    dishes: [],
+    ingredients: [],
+    families: [],
+    calendar: []
+  })
   const messagesEndRef = useRef(null)
 
-  const quickActions = [
-    {
-      title: "Suggérer un menu",
-      description: "Créer un menu équilibré pour la semaine",
-      icon: FaUtensils,
-      color: "from-green-500 to-emerald-500",
-      prompt:
-        "Peux-tu me suggérer un menu équilibré pour la semaine en tenant compte des allergies et préférences de ma famille ?",
-    },
-    {
-      title: "Optimiser les courses",
-      description: "Organiser ma liste de courses",
-      icon: FaShoppingCart,
-      color: "from-blue-500 to-cyan-500",
-      prompt: "Comment puis-je optimiser ma liste de courses pour économiser du temps et de l'argent ?",
-    },
-    {
-      title: "Recette avec ingrédients",
-      description: "Créer une recette avec mes stocks",
-      icon: FaLightbulb,
-      color: "from-orange-500 to-red-500",
-      prompt: "Peux-tu me proposer une recette avec les ingrédients que j'ai en stock ?",
-    },
-    {
-      title: "Conseils nutrition",
-      description: "Obtenir des conseils santé",
-      icon: FaHeart,
-      color: "from-pink-500 to-rose-500",
-      prompt: "Donne-moi des conseils nutritionnels adaptés aux besoins de ma famille",
-    },
-  ]
+  // Configuration Gemini AI avec fallback
+  const genAI = new GoogleGenerativeAI("AIzaSyDdI0hIm4N4lZkqxRdlqMzb_T4-Bm8JTOU")
 
   useEffect(() => {
-    loadUserData()
-    // Message de bienvenue
-    setMessages([
-      {
-        id: 1,
-        type: "assistant",
-        content:
-          "Bonjour ! Je suis votre assistant IA pour FamilyMeal. Je peux vous aider à planifier vos repas, optimiser vos courses, suggérer des recettes et donner des conseils nutritionnels. Comment puis-je vous aider aujourd'hui ?",
-        timestamp: new Date(),
-      },
-    ])
+    loadContextData()
   }, [])
 
   useEffect(() => {
     scrollToBottom()
   }, [messages])
 
-  const loadUserData = async () => {
-    try {
-      const currentUser = await getCurrentUser()
-      setUser(currentUser)
-
-      const familiesResult = await getUserFamilies()
-      if (familiesResult.data && familiesResult.data.length > 0) {
-        const family = familiesResult.data[0]
-        const [membersResult, dishesResult] = await Promise.all([getFamilyMembers(family.id), getUserDishes()])
-
-        setFamilyData({
-          family,
-          members: membersResult.data || [],
-          dishes: dishesResult.data || [],
-        })
-      }
-    } catch (error) {
-      console.error("Erreur lors du chargement des données:", error)
-    }
-  }
-
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }
 
-  const sendMessage = async (messageText = inputMessage) => {
-    if (!messageText.trim() || loading) return
+  const loadContextData = async () => {
+    try {
+      const [membersResult, dishesResult, ingredientsResult, familiesResult] = await Promise.all([
+        getAllFamilyMembers(),
+        getUserDishes(),
+        getUserIngredients(),
+        getUserFamilies()
+      ])
+
+      // Charger le calendrier pour toutes les familles
+      let allCalendarData = []
+      if (familiesResult.data) {
+        for (const family of familiesResult.data) {
+          const startDate = new Date()
+          startDate.setMonth(startDate.getMonth() - 1)
+          const endDate = new Date()
+          endDate.setMonth(endDate.getMonth() + 1)
+          
+          const calendarResult = await getFamilyCalendar(
+            family.id,
+            startDate.toISOString().split('T')[0],
+            endDate.toISOString().split('T')[0]
+          )
+          
+          if (calendarResult.data) {
+            allCalendarData.push(...calendarResult.data.map(meal => ({
+              ...meal,
+              family_name: family.name
+            })))
+          }
+        }
+      }
+
+      setContextData({
+        members: membersResult.data || [],
+        dishes: dishesResult.data || [],
+        ingredients: ingredientsResult.data || [],
+        families: familiesResult.data || [],
+        calendar: allCalendarData
+      })
+    } catch (error) {
+      console.error("Erreur lors du chargement des données contextuelles:", error)
+    }
+  }
+
+  const sendMessage = async () => {
+    if (!inputMessage.trim() || isLoading) return
 
     const userMessage = {
       id: Date.now(),
       type: "user",
-      content: messageText,
-      timestamp: new Date(),
+      content: inputMessage,
+      timestamp: new Date()
     }
 
-    setMessages((prev) => [...prev, userMessage])
+    setMessages(prev => [...prev, userMessage])
     setInputMessage("")
-    setLoading(true)
+    setIsLoading(true)
 
-    // Simuler une réponse de l'IA
-    setTimeout(() => {
-      const aiResponse = generateAIResponse(messageText)
-      const assistantMessage = {
-        id: Date.now() + 1,
-        type: "assistant",
-        content: aiResponse,
-        timestamp: new Date(),
+    try {
+      // Essayer plusieurs modèles en cas d'erreur
+      const models = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-pro"]
+      let response = null
+      let lastError = null
+
+      for (const modelName of models) {
+        try {
+          const model = genAI.getGenerativeModel({ model: modelName })
+          
+          const contextPrompt = `
+            Tu es un assistant culinaire expert pour une application de gestion familiale des repas.
+            
+            DONNÉES CONTEXTUELLES:
+            
+            Familles: ${JSON.stringify(contextData.families)}
+            
+            Membres de famille (TOUS): ${JSON.stringify(contextData.members)}
+            
+            Plats disponibles: ${JSON.stringify(contextData.dishes)}
+            
+            Ingrédients: ${JSON.stringify(contextData.ingredients)}
+            
+            Calendrier des repas: ${JSON.stringify(contextData.calendar)}
+            
+            INSTRUCTIONS:
+            - Réponds en français
+            - Sois concis et pratique
+            - Utilise les données contextuelles pour personnaliser tes réponses
+            - Propose des solutions concrètes
+            - Tiens compte des allergies et préférences des membres
+            - Suggère des améliorations basées sur les données
+            
+            Question de l'utilisateur: ${inputMessage}
+          `
+
+          const result = await model.generateContent(contextPrompt)
+          response = await result.response
+          break // Succès, sortir de la boucle
+        } catch (error) {
+          lastError = error
+          console.warn(`Erreur avec le modèle ${modelName}:`, error.message)
+          
+          // Si c'est une erreur 503, attendre un peu avant de réessayer
+          if (error.message.includes('503') || error.message.includes('overloaded')) {
+            await new Promise(resolve => setTimeout(resolve, 2000))
+          }
+        }
       }
-      setMessages((prev) => [...prev, assistantMessage])
-      setLoading(false)
-    }, 1500)
-  }
 
-  const generateAIResponse = (userMessage) => {
-    const message = userMessage.toLowerCase()
+      if (!response) {
+        throw lastError || new Error("Tous les modèles ont échoué")
+      }
 
-    if (message.includes("menu") || message.includes("repas") || message.includes("planifier")) {
-      return `Voici mes suggestions pour un menu équilibré cette semaine :
+      const aiMessage = {
+        id: Date.now() + 1,
+        type: "ai",
+        content: response.text(),
+        timestamp: new Date()
+      }
 
-**Lundi**
-- Petit-déjeuner : Porridge aux fruits et noix
-- Déjeuner : Salade de quinoa aux légumes grillés
-- Dîner : Saumon grillé avec légumes vapeur
-
-**Mardi**
-- Petit-déjeuner : Smoothie vert aux épinards et banane
-- Déjeuner : Soupe de lentilles avec pain complet
-- Dîner : Poulet rôti aux herbes avec riz brun
-
-**Mercredi**
-- Petit-déjeuner : Œufs brouillés avec avocat
-- Déjeuner : Wrap au thon et légumes
-- Dîner : Curry de légumes avec naan
-
-${
-  familyData?.members?.some((m) => m.allergies?.length > 0)
-    ? `\n⚠️ **Note importante** : J'ai pris en compte les allergies de votre famille (${familyData.members
-        .filter((m) => m.allergies?.length > 0)
-        .map((m) => `${m.name}: ${m.allergies.join(", ")}`)
-        .join("; ")})`
-    : ""
-}
-
-Voulez-vous que je détaille une de ces recettes ou que je vous aide à créer la liste de courses correspondante ?`
+      setMessages(prev => [...prev, aiMessage])
+    } catch (error) {
+      console.error("Erreur Gemini AI:", error)
+      
+      // Message d'erreur convivial
+      const errorMessage = {
+        id: Date.now() + 1,
+        type: "ai",
+        content: "Désolé, je rencontre des difficultés techniques en ce moment. L'IA est temporairement surchargée. Veuillez réessayer dans quelques instants. En attendant, je peux vous dire que vous avez " + 
+                contextData.dishes.length + " plats et " + 
+                contextData.members.length + " membres dans vos familles.",
+        timestamp: new Date()
+      }
+      
+      setMessages(prev => [...prev, errorMessage])
+    } finally {
+      setIsLoading(false)
     }
-
-    if (message.includes("course") || message.includes("liste") || message.includes("acheter")) {
-      return `Pour optimiser vos courses, voici mes conseils :
-
-**🛒 Organisation par zones**
-1. **Fruits et légumes** - Commencez par ici pour les produits frais
-2. **Produits laitiers** - Réfrigérés, à prendre en fin de parcours
-3. **Viandes et poissons** - Idem, pour maintenir la chaîne du froid
-4. **Épicerie sèche** - Conserves, pâtes, riz, etc.
-
-**💰 Économies**
-- Privilégiez les produits de saison
-- Comparez les prix au kilo/litre
-- Utilisez les promotions sur vos produits habituels
-- Achetez en vrac pour les produits non périssables
-
-**⏰ Gain de temps**
-- Organisez votre liste selon le plan du magasin
-- Faites vos courses aux heures creuses
-- Utilisez les applications de drive si disponibles
-
-Voulez-vous que je génère une liste de courses optimisée pour vos repas de la semaine ?`
-    }
-
-    if (message.includes("recette") || message.includes("cuisiner") || message.includes("stock")) {
-      return `Excellente idée ! Voici une recette que vous pouvez réaliser avec des ingrédients courants :
-
-**🍝 Pâtes aux légumes de saison**
-
-**Ingrédients** (4 personnes) :
-- 400g de pâtes
-- 2 courgettes
-- 2 tomates
-- 1 oignon
-- 2 gousses d'ail
-- Huile d'olive
-- Herbes de Provence
-- Parmesan râpé
-
-**Préparation** (20 min) :
-1. Faites cuire les pâtes selon les instructions
-2. Émincez l'oignon et l'ail, coupez les légumes en dés
-3. Faites revenir l'oignon dans l'huile d'olive
-4. Ajoutez les légumes et les herbes, cuisez 10 min
-5. Mélangez avec les pâtes égouttées
-6. Servez avec le parmesan
-
-**💡 Variantes** : Ajoutez des protéines (poulet, thon) ou d'autres légumes selon vos stocks.
-
-Avez-vous des ingrédients spécifiques en stock que vous aimeriez utiliser ?`
-    }
-
-    if (message.includes("nutrition") || message.includes("santé") || message.includes("conseil")) {
-      return `Voici mes conseils nutritionnels pour votre famille :
-
-**🥗 Équilibre alimentaire**
-- **5 portions** de fruits et légumes par jour
-- **3 repas** principaux + 1-2 collations si besoin
-- **Hydratation** : 1,5-2L d'eau par jour
-
-**🍎 Groupes alimentaires à chaque repas**
-- **Protéines** : viande, poisson, œufs, légumineuses
-- **Féculents** : pain, pâtes, riz, pommes de terre
-- **Légumes** : crus et cuits, variez les couleurs
-- **Produits laitiers** : lait, yaourt, fromage
-
-**👨‍👩‍👧‍👦 Conseils famille**
-${familyData?.members?.some((m) => m.is_sick) ? `- Adaptations pour les problèmes de santé identifiés\n` : ""}
-${familyData?.members?.some((m) => m.allergies?.length > 0) ? `- Alternatives pour les allergies alimentaires\n` : ""}
-- Impliquez les enfants dans la préparation
-- Variez les modes de cuisson
-- Limitez les produits ultra-transformés
-
-Avez-vous des questions spécifiques sur l'alimentation de votre famille ?`
-    }
-
-    // Réponse générale
-    return `Je comprends votre question ! En tant qu'assistant IA spécialisé dans la nutrition familiale, je peux vous aider avec :
-
-• **Planification de menus** équilibrés et adaptés
-• **Suggestions de recettes** selon vos ingrédients
-• **Optimisation des courses** pour économiser temps et argent
-• **Conseils nutritionnels** personnalisés
-• **Gestion des allergies** et régimes spéciaux
-
-${familyData ? `Je vois que votre famille compte ${familyData.members.length} membre(s) et vous avez ${familyData.dishes.length} recette(s) enregistrée(s).` : ""}
-
-Pouvez-vous me dire plus précisément comment je peux vous aider aujourd'hui ?`
-  }
-
-  const copyToClipboard = (text) => {
-    navigator.clipboard.writeText(text)
-    // Vous pourriez ajouter une notification ici
   }
 
   const handleKeyPress = (e) => {
@@ -260,148 +192,108 @@ Pouvez-vous me dire plus précisément comment je peux vous aider aujourd'hui ?`
     }
   }
 
+  const formatTime = (date) => {
+    return new Date(date).toLocaleTimeString("fr-FR", {
+      hour: "2-digit",
+      minute: "2-digit"
+    })
+  }
+
   return (
-    <div className="h-[calc(100vh-200px)] flex flex-col">
+    <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="bg-gradient-to-r from-purple-500 to-pink-500 rounded-2xl p-6 text-white mb-6">
-        <div className="flex items-center space-x-4">
-          <div className="w-16 h-16 bg-white/20 rounded-2xl flex items-center justify-center">
-            <FaRobot className="text-3xl" />
+      <div className="border-b border-gray-200 dark:border-gray-700 p-4">
+        <div className="flex items-center space-x-3">
+          <div className="w-10 h-10 bg-gray-100 dark:bg-gray-700 rounded-full flex items-center justify-center">
+            <FaRobot className="text-gray-600 dark:text-gray-400" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold">Assistant IA FamilyMeal</h1>
-            <p className="text-purple-100">Votre expert en nutrition et planification de repas</p>
+            <h1 className="text-lg font-semibold text-gray-900 dark:text-white">Assistant IA Culinaire</h1>
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              {contextData.members.length} membres • {contextData.dishes.length} plats • {contextData.families.length} familles
+            </p>
           </div>
         </div>
       </div>
 
-      {/* Quick Actions */}
-      {messages.length <= 1 && (
-        <div className="mb-6">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Actions rapides</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {quickActions.map((action, index) => {
-              const Icon = action.icon
-              return (
-                <button
-                  key={index}
-                  onClick={() => sendMessage(action.prompt)}
-                  className={`p-4 rounded-xl bg-gradient-to-r ${action.color} text-white hover:shadow-lg transition-all duration-300 transform hover:-translate-y-1 text-left`}
-                >
-                  <div className="flex items-center space-x-3 mb-2">
-                    <Icon className="text-xl" />
-                    <h3 className="font-semibold">{action.title}</h3>
-                  </div>
-                  <p className="text-sm opacity-90">{action.description}</p>
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
       {/* Messages */}
-      <div className="flex-1 bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 flex flex-col">
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
-          {messages.map((message) => (
-            <div key={message.id} className={`flex ${message.type === "user" ? "justify-end" : "justify-start"}`}>
-              <div
-                className={`flex items-start space-x-3 max-w-[80%] ${message.type === "user" ? "flex-row-reverse space-x-reverse" : ""}`}
-              >
-                <div
-                  className={`w-10 h-10 rounded-full flex items-center justify-center ${
-                    message.type === "user"
-                      ? "bg-gradient-to-r from-blue-500 to-purple-500"
-                      : "bg-gradient-to-r from-purple-500 to-pink-500"
-                  }`}
-                >
-                  {message.type === "user" ? <FaUser className="text-white" /> : <FaRobot className="text-white" />}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {messages.map((message) => (
+          <div
+            key={message.id}
+            className={`flex ${message.type === "user" ? "justify-end" : "justify-start"}`}
+          >
+            <div
+              className={`max-w-[80%] rounded-2xl px-4 py-3 ${
+                message.type === "user"
+                  ? "bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900"
+                  : "bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white"
+              }`}
+            >
+              <div className="flex items-start space-x-2">
+                <div className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 mt-1">
+                  {message.type === "user" ? (
+                    <FaUser className="text-xs" />
+                  ) : (
+                    <FaRobot className="text-xs" />
+                  )}
                 </div>
-                <div
-                  className={`rounded-2xl p-4 ${
-                    message.type === "user"
-                      ? "bg-gradient-to-r from-blue-500 to-purple-500 text-white"
-                      : "bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white"
-                  }`}
-                >
-                  <div className="whitespace-pre-wrap">{message.content}</div>
-                  <div className="flex items-center justify-between mt-3 pt-3 border-t border-white/20 dark:border-gray-600">
-                    <span className="text-xs opacity-70">
-                      {message.timestamp.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}
-                    </span>
-                    {message.type === "assistant" && (
-                      <div className="flex items-center space-x-2">
-                        <button
-                          onClick={() => copyToClipboard(message.content)}
-                          className="p-1 hover:bg-white/20 dark:hover:bg-gray-600 rounded transition-colors"
-                          title="Copier"
-                        >
-                          <FaCopy className="text-xs" />
-                        </button>
-                        <button
-                          className="p-1 hover:bg-white/20 dark:hover:bg-gray-600 rounded transition-colors"
-                          title="Utile"
-                        >
-                          <FaThumbsUp className="text-xs" />
-                        </button>
-                        <button
-                          className="p-1 hover:bg-white/20 dark:hover:bg-gray-600 rounded transition-colors"
-                          title="Pas utile"
-                        >
-                          <FaThumbsDown className="text-xs" />
-                        </button>
-                      </div>
-                    )}
+                <div className="flex-1">
+                  <div className="whitespace-pre-wrap text-sm leading-relaxed">
+                    {message.content}
+                  </div>
+                  <div className={`text-xs mt-2 opacity-70`}>
+                    {formatTime(message.timestamp)}
                   </div>
                 </div>
               </div>
             </div>
-          ))}
-
-          {loading && (
-            <div className="flex justify-start">
-              <div className="flex items-start space-x-3 max-w-[80%]">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-r from-purple-500 to-pink-500 flex items-center justify-center">
-                  <FaRobot className="text-white" />
-                </div>
-                <div className="bg-gray-100 dark:bg-gray-700 rounded-2xl p-4">
-                  <div className="flex items-center space-x-2">
-                    <FaSpinner className="animate-spin text-purple-500" />
-                    <span className="text-gray-600 dark:text-gray-400">L'assistant réfléchit...</span>
-                  </div>
+          </div>
+        ))}
+        
+        {isLoading && (
+          <div className="flex justify-start">
+            <div className="bg-gray-100 dark:bg-gray-800 rounded-2xl px-4 py-3 max-w-[80%]">
+              <div className="flex items-center space-x-2">
+                <FaRobot className="text-gray-600 dark:text-gray-400" />
+                <div className="flex space-x-1">
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "0.1s" }}></div>
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: "0.2s" }}></div>
                 </div>
               </div>
             </div>
-          )}
+          </div>
+        )}
+        
+        <div ref={messagesEndRef} />
+      </div>
 
-          <div ref={messagesEndRef} />
+      {/* Input */}
+      <div className="border-t border-gray-200 dark:border-gray-700 p-4">
+        <div className="flex items-end space-x-3">
+          <div className="flex-1">
+            <textarea
+              value={inputMessage}
+              onChange={(e) => setInputMessage(e.target.value)}
+              onKeyPress={handleKeyPress}
+              placeholder="Posez votre question sur les repas, recettes, planning..."
+              className="w-full px-4 py-3 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-gray-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white resize-none"
+              rows="2"
+              disabled={isLoading}
+            />
+          </div>
+          <button
+            onClick={sendMessage}
+            disabled={!inputMessage.trim() || isLoading}
+            className="bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 p-3 rounded-xl hover:bg-gray-800 dark:hover:bg-gray-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <FaPaperPlane />
+          </button>
         </div>
-
-        {/* Input */}
-        <div className="border-t border-gray-200 dark:border-gray-700 p-4">
-          <div className="flex items-center space-x-4">
-            <div className="flex-1 relative">
-              <textarea
-                value={inputMessage}
-                onChange={(e) => setInputMessage(e.target.value)}
-                onKeyPress={handleKeyPress}
-                placeholder="Posez votre question sur la nutrition, les recettes, la planification..."
-                className="w-full px-4 py-3 pr-12 border border-gray-300 dark:border-gray-600 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white dark:bg-gray-700 text-gray-900 dark:text-white resize-none"
-                rows="2"
-                disabled={loading}
-              />
-              <button
-                onClick={() => sendMessage()}
-                disabled={!inputMessage.trim() || loading}
-                className="absolute right-3 bottom-3 p-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg hover:shadow-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <FaPaperPlane />
-              </button>
-            </div>
-          </div>
-          <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-            Appuyez sur Entrée pour envoyer, Shift+Entrée pour une nouvelle ligne
-          </div>
+        
+        <div className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+          Appuyez sur Entrée pour envoyer • Maj+Entrée pour une nouvelle ligne
         </div>
       </div>
     </div>
