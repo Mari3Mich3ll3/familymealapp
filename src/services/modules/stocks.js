@@ -20,11 +20,11 @@ export const saveStock = async (stockData, familyId) => {
 
     if (!family) throw new Error("Famille non trouvée")
 
-    // Récupérer l'ingrédient
+    // Récupérer l'ingrédient par ID (car front envoie l’ID maintenant)
     const { data: ingredient } = await supabase
       .from("ingredients")
       .select("id")
-      .eq("name", stockData.ingredient)
+      .eq("id", stockData.ingredient)
       .eq("created_by", user.id)
       .single()
 

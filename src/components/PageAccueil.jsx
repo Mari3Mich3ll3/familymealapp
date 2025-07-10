@@ -41,7 +41,7 @@ const PageAccueil = () => {
       title: "Profils Familiaux",
       description: "Gérez les allergies et préférences de chaque membre de votre famille",
       image:
- "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?ixlib=rb-4.0.3&auto=format&fit=crop&w=150&q=80",
+          "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?ixlib=rb-4.0.3&auto=format&fit=crop&w=150&q=80",
       details:
         "Créez des profils personnalisés pour chaque membre de votre famille avec leurs allergies, intolérances et préférences alimentaires.",
     },

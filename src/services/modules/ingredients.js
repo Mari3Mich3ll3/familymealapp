@@ -131,3 +131,7 @@ export const getUserIngredients = async () => {
     return { data: [], error: err }
   }
 }
+
+export const getAllIngredients = async () => {
+  return await supabase.from("ingredients").select("*")
+}
